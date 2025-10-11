@@ -6,10 +6,8 @@ import cloudscraper
 import json
 import shutil
 from pathlib import Path
-from datetime import date, datetime
-from bs4 import BeautifulSoup
+from datetime import date
 import os
-
 import process_cheats
 
 
@@ -34,29 +32,6 @@ class DatabaseInfo:
         return self.database_version
 
 
-class GbatempCheatsInfo:
-    def __init__(self):
-        self.scraper = cloudscraper.create_scraper()
-        self.page_url = "https://gbatemp.net/download/cheat-codes-sxos-and-ams-main-cheat-file-updated.36311/"
-        self.gbatemp_version = self.fetch_gbatemp_version()
-
-    def fetch_gbatemp_version(self):
-        page = self.scraper.get(f"{self.page_url}/updates")
-        soup = BeautifulSoup(page.content, "html.parser")
-        dates = soup.find("div", {"class": "block-container"}).find_all("time", {"class": "u-dt"})
-        version = max([datetime.fromisoformat(date.get("datetime")) for date in dates])
-        return version.date()
-
-    def has_new_cheats(self, database_version):
-        return self.gbatemp_version > database_version
-
-    def get_gbatemp_version(self):
-        return self.gbatemp_version
-
-    def get_download_url(self):
-        return f"{self.page_url}/download"
-
-
 class HighFPSCheatsInfo:
     def __init__(self):
         self.scraper = cloudscraper.create_scraper()
@@ -66,10 +41,10 @@ class HighFPSCheatsInfo:
 
     def fetch_high_FPS_cheats_version(self):
         token = os.getenv('GITHUB_TOKEN')
-        headers = {'Authorization': f'token {token}'}
+        headers = {'Authorization': f'token {token}'} if token else {}
         repo_info = self.scraper.get(self.api_url, headers=headers).json()
-        last_commit_date = repo_info.get("commit").get("commit").get("author").get("date")
-        return date.fromisoformat(last_commit_date.split("T")[0])
+        last_commit_date = repo_info.get("commit", {}).get("commit", {}).get("author", {}).get("date")
+        return date.fromisoformat(last_commit_date.split("T")[0]) if last_commit_date else date.today()
 
     def has_new_cheats(self, database_version):
         return self.highfps_version > database_version
@@ -81,7 +56,7 @@ class HighFPSCheatsInfo:
         return self.download_url
 
 
-class ArchiveWorker():
+class ArchiveWorker:
     def __init__(self):
         self.scraper = cloudscraper.create_scraper()
 
@@ -97,24 +72,25 @@ class ArchiveWorker():
             zf = zipfile.ZipFile(path)
             zf.extractall(path=extract_path)
         else:
+            print(f"Unknown archive format: {path}")
             return False
         return True
 
     def build_cheat_files(self, cheats_path, out_path):
         cheats_path = Path(cheats_path)
         titles_path = Path(out_path).joinpath("titles")
-        if not(titles_path.exists()):
+        if not titles_path.exists():
             titles_path.mkdir(parents=True)
         for tid in cheats_path.iterdir():
             tid_path = titles_path.joinpath(tid.stem)
-            tid_path.mkdir()
+            tid_path.mkdir(exist_ok=True)
             with open(tid, "r") as cheats_file:
                 cheats_dict = json.load(cheats_file)
             for key, value in cheats_dict.items():
                 if key == "attribution":
                     for author, content in value.items():
-                        with open(tid_path.joinpath(author), "w") as attribution_file:
-                            attribution_file.write(content)
+                        with open(tid_path.joinpath(author), "w") as f:
+                            f.write(content)
                 else:
                     cheats_folder = tid_path.joinpath("cheats")
                     cheats_folder.mkdir(exist_ok=True)
@@ -122,8 +98,8 @@ class ArchiveWorker():
                     for _, content in value.items():
                         cheats += content
                     if cheats:
-                        with open(cheats_folder.joinpath(f"{key}.txt"), "w") as bid_file:
-                            bid_file.write(cheats)
+                        with open(cheats_folder.joinpath(f"{key}.txt"), "w") as f:
+                            f.write(cheats)
 
     def touch_all(self, path):
         for path in path.rglob("*"):
@@ -143,6 +119,7 @@ class ArchiveWorker():
         with open(f"{out_path}/VERSION", "w") as version_file:
             version_file.write(str(date.today()))
 
+
 def count_cheats(cheats_directory):
     n_games = 0
     n_updates = 0
@@ -156,49 +133,56 @@ def count_cheats(cheats_directory):
         n_games += 1
 
     readme_file = Path('README.md')
-    with readme_file.open('r') as file:
-        lines = file.readlines()
-    lines[-1] = f"{n_cheats} cheats in {n_games} titles/{n_updates} updates"
-    with readme_file.open('w') as file:
-        file.writelines(lines)
+    if readme_file.exists():
+        with readme_file.open('r') as file:
+            lines = file.readlines()
+        if lines:
+            lines[-1] = f"{n_cheats} cheats in {n_games} titles/{n_updates} updates\n"
+            with readme_file.open('w') as file:
+                file.writelines(lines)
+
 
 if __name__ == '__main__':
     cheats_path = "cheats"
     cheats_gba_path = "cheats_gbatemp"
     cheats_gfx_path = "cheats_gfx"
-    archive_path = "titles.zip"
+    archive_path = "titles.rar"
+
     database = DatabaseInfo()
     database_version = database.get_database_version()
     highfps = HighFPSCheatsInfo()
-    gbatemp = GbatempCheatsInfo()
-    #if gbatemp.has_new_cheats(database_version) or highfps.has_new_cheats(database_version):
+
+    # Always rebuild regardless of version comparison for now
     if True:
         archive_worker = ArchiveWorker()
-        print(f"Downloading cheats")
-        archive_worker.download_archive(gbatemp.get_download_url(), archive_path)
-        archive_worker.extract_archive(archive_path, "gbatemp")
-        archive_worker.download_archive(highfps.get_download_url(), archive_path)
-        archive_worker.extract_archive(archive_path)
 
-        print("Processing the cheat sheets")
+        print(f"Extracting cheats from {archive_path} (instead of downloading from GBAtemp)...")
+        archive_worker.extract_archive(archive_path, "gbatemp")
+
+        print("Downloading HighFPS cheats...")
+        archive_worker.download_archive(highfps.get_download_url(), "highfps.zip")
+        archive_worker.extract_archive("highfps.zip")
+
+        print("Processing the cheat sheets...")
         process_cheats.ProcessCheats("gbatemp/titles", cheats_gba_path)
         process_cheats.ProcessCheats("NX-60FPS-RES-GFX-Cheats-main/titles", cheats_gfx_path)
-        process_cheats.ProcessCheats("gbatemp/titles", cheats_path) # this could be done more elegantly
+        process_cheats.ProcessCheats("gbatemp/titles", cheats_path)
         process_cheats.ProcessCheats("NX-60FPS-RES-GFX-Cheats-main/titles", cheats_path)
 
-        print("building complete cheat sheets")
+        print("Building complete cheat sheets...")
         out_path = Path("complete")
-        out_path.mkdir()
+        out_path.mkdir(exist_ok=True)
         archive_worker.build_cheat_files(cheats_path, out_path)
 
-        print("Creating the archives")
+        print("Creating the archives...")
         archive_worker.create_archives("complete")
         archive_worker.create_archives("NX-60FPS-RES-GFX-Cheats-main")
         archive_worker.create_archives("gbatemp")
 
         archive_worker.create_version_file()
-
         count_cheats(cheats_path)
+
+        print("All done!")
 
     else:
         print("Everything is already up to date!")
